@@ -1,0 +1,121 @@
+# SNES ROM Proxy for VRChat
+
+**Link builder page: https://dubstepdragon.github.io/Rom_Hosting_Proxy/**
+
+Udon can only download text (`VRCStringDownloader`) or images (`VRCImageDownloader`), and it cannot
+build a `VRCUrl` from a string at runtime. So the ROM travels as a lossless PNG. The proxy fetches
+a ROM from its original host and packs it into that PNG on the fly. The link builder page makes the
+URLs you paste into your world.
+
+Nothing in this project stores or hosts ROMs. The page only builds links, and the proxy
+(`https://rom-hosting-proxy.vercel.app`) fetches each ROM from its original host when VRChat asks
+for it.
+
+## Using the page
+
+1. Open the [link builder](https://dubstepdragon.github.io/Rom_Hosting_Proxy/).
+2. Paste a **direct link** to a `.sfc` / `.smc` file, or a `.zip` that contains one, and click
+   **Make link**.
+3. Click **Test through proxy**. The proxy downloads and converts the ROM, and the page shows the
+   title, LoROM/HiROM mapping, ROM size and SRAM size, or the reason the ROM was rejected.
+4. Click **Copy link** and paste it into a `VRCUrlInputField` (or wherever your world takes a
+   `VRCUrl`) for `VRCImageDownloader`.
+
+The generated link looks like this:
+
+```
+https://rom-hosting-proxy.vercel.app/rom.png?url=https%3A%2F%2Fexample.org%2Fhomebrew.zip
+```
+
+### What links work
+
+* **Direct file links only.** A download page (HTML) is rejected with a clear error. The proxy
+  does not scrape download sites.
+* Copier headers are stripped, and LoROM/HiROM is detected automatically.
+* Games that need enhancement chips (SuperFX, SA-1, DSP-1, Cx4, S-DD1, SPC7110) and ExHiROM
+  cartridges are **rejected**, so they fail cleanly instead of crashing.
+* ROMs up to 8 MB.
+
+Image URLs outside VRChat's trusted list, including the proxy's `vercel.app` domain, only load for players who
+have **Allow Untrusted URLs** turned on.
+
+## Deploying the proxy (Vercel)
+
+The proxy runs as a Vercel serverless function on the free Hobby plan (non-commercial use).
+[`api/`](api) holds the functions, [`vercel.json`](vercel.json) maps `/rom.png` and `/health` to
+them, and [`.vercelignore`](.vercelignore) makes sure only the proxy code is deployed.
+
+One-time setup:
+
+1. On [vercel.com](https://vercel.com/new), choose **Add New → Project** and import this GitHub
+   repository.
+2. Keep the project name `rom-hosting-proxy`, Framework Preset **Other**, and no build command.
+   Click **Deploy**.
+3. Check that `https://rom-hosting-proxy.vercel.app/health` answers `ok`.
+
+After that, every push to `main` redeploys the proxy. If Vercel gives the project a different
+domain, update `PROXY` at the top of [`docs/app.js`](docs/app.js) and the link above.
+
+Vercel caches each converted ROM on its CDN for an hour, so a whole instance loading the same
+link only converts it once. Vercel limits function responses to 4.5 MB, so the very largest ROMs
+(roughly 6–8 MB) may fail there. Use the standalone server for those.
+
+## Running the proxy yourself
+
+`rom-proxy/server.js` needs Node 22+ and has no dependencies.
+
+```
+cd rom-proxy
+node server.js              # PORT=8787 by default
+```
+
+VRChat requires `https` URLs, so put it behind HTTPS (a reverse proxy, a Cloudflare Tunnel, or a
+host such as Render). To point the page at it, change `PROXY` in [`docs/app.js`](docs/app.js).
+
+| Variable          | Default | Purpose                                              |
+| ----------------- | ------- | ---------------------------------------------------- |
+| `PORT`            | `8787`  | Port to listen on                                    |
+| `MAX_DOWNLOAD_MB` | `16`    | Largest file the proxy will download                 |
+| `FETCH_TIMEOUT_MS`| `25000` | Download timeout                                     |
+| `ALLOWED_HOSTS`   | (none)  | Comma-separated hosts to allow, e.g. `a.com,b.org`   |
+
+On Vercel, set these (except `PORT`) under Project Settings → Environment Variables.
+
+Private and LAN addresses are always blocked. Endpoints:
+
+* `GET /rom.png?url=<ROM link>` returns the packed PNG, or a non-200 plain-text error so VRChat
+  reports a failure.
+* `GET /health` returns `ok`.
+
+## Offline converter
+
+To convert a ROM without a proxy:
+
+```
+node rom-proxy/rom2png.js game.sfc game.png
+```
+
+You can host that PNG yourself. GitHub Pages is on VRChat's trusted list by default. A Pages site
+is public even when its repo is private, so only publish ROMs you have the right to share, such as
+homebrew.
+
+## PNG layout
+
+RGB, 2048 pixels wide, 3 bytes per pixel, read row-major from the top-left:
+
+| Bytes   | Contents                                  |
+| ------- | ----------------------------------------- |
+| 0-2     | `S`, `N`, `S`                             |
+| 3-5     | ROM length (little endian)                |
+| 6       | Flags (bit 1 = HiROM)                     |
+| 7       | SRAM size code (log2(KB)+1, 0 = none)     |
+| 8-47    | Reserved (title in 8-28 for debugging)    |
+| 48+     | ROM data                                  |
+
+This must match `Assets/SNES/Shaders/SnesRomDecode.shader` in the emulator project.
+
+## Deploying the page
+
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) publishes `docs/` to GitHub Pages on
+every push to `main`. One-time setup: **Settings → Pages → Build and deployment → Source:
+GitHub Actions**.

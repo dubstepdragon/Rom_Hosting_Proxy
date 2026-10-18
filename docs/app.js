@@ -1,19 +1,13 @@
 // Link builder for the GitHub Pages site. It never stores ROMs: it builds
 // <proxy>/rom.png?url=<ROM link> for VRCImageDownloader and can test that link through the proxy.
 
-// Set this to your deployed rom-proxy so visitors don't have to enter one (e.g. 'https://rom.example.org').
-const DEFAULT_PROXY = '';
+// The rom-proxy deployment on Vercel (api/ + vercel.json in this repo). Change it if Vercel gave
+// the project a different domain.
+const PROXY = 'https://rom-hosting-proxy.vercel.app';
 
 const $ = (id) => document.getElementById(id);
 
-const store = {
-  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
-  set(key, value) { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch { /* storage blocked */ } },
-};
-
 function status(el, text, kind = '') { el.textContent = text; el.className = 'status ' + kind; }
-
-function proxyBase() { return $('proxy').value.trim().replace(/\/+$/, ''); }
 
 function build() {
   const el = $('src-status');
@@ -22,12 +16,8 @@ function build() {
   let url;
   try { url = new URL(link); } catch { return status(el, 'That is not a valid URL.', 'err'); }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return status(el, 'Only http(s) links are supported.', 'err');
-  const proxy = proxyBase();
-  if (!proxy) { $('proxy-box').open = true; return status(el, 'Enter your rom-proxy server URL first.', 'err'); }
-  if (!/^https:\/\//i.test(proxy)) return status(el, 'The proxy must use https://. VRChat only loads https URLs.', 'err');
-  store.set('proxy', proxy === DEFAULT_PROXY ? '' : proxy);
   status(el, '');
-  $('link').textContent = `${proxy}/rom.png?url=${encodeURIComponent(url.href)}`;
+  $('link').textContent = `${PROXY}/rom.png?url=${encodeURIComponent(url.href)}`;
   status($('test-status'), '');
   $('info').hidden = true;
   $('result').hidden = false;
@@ -71,7 +61,7 @@ async function test() {
   try {
     let res;
     try { res = await fetch($('link').textContent); }
-    catch { throw new Error('Could not reach the proxy. Check its URL and that it is running behind HTTPS.'); }
+    catch { throw new Error('Could not reach the proxy. It may be down or still deploying; try again in a minute.'); }
     if (!res.ok) {
       // rom-proxy explains its errors in plain text.
       const detail = /text\/plain/i.test(res.headers.get('content-type') || '') ? await res.text() : '';
@@ -107,12 +97,6 @@ async function copyLink() {
 }
 
 function init() {
-  // ?proxy=<url> lets a world creator share a page link with their proxy pre-filled.
-  const fromQuery = new URLSearchParams(location.search).get('proxy');
-  if (fromQuery) store.set('proxy', fromQuery);
-  $('proxy').value = store.get('proxy') || DEFAULT_PROXY;
-  if (!$('proxy').value) $('proxy-box').open = true;
-
   $('build-btn').addEventListener('click', build);
   $('src-url').addEventListener('keydown', e => { if (e.key === 'Enter') build(); });
   $('copy-btn').addEventListener('click', copyLink);

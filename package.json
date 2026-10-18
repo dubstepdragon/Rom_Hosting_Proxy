@@ -1,0 +1,6 @@
+{
+  "name": "rom-hosting-proxy",
+  "private": true,
+  "description": "SNES ROM to PNG proxy for VRChat's VRCImageDownloader",
+  "engines": { "node": "22.x" }
+}

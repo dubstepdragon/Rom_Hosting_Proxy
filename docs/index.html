@@ -45,14 +45,13 @@
   code { padding: 1px 4px; }
   .url { display: block; padding: 8px 10px; overflow-wrap: anywhere; margin: 0 0 8px; }
   [hidden] { display: none !important; }
-  details summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 </style>
 </head>
 <body>
 <main>
   <h1>SNES ROM Link Builder</h1>
   <p class="lead">Turn a direct ROM link into an image URL for the VRChat emulator's
-    <code>VRCImageDownloader</code>. When the URL loads, the rom-proxy downloads the ROM from its
+    <code>VRCImageDownloader</code>. When the URL loads, the proxy downloads the ROM from its
     original host and converts it on the fly. This site does not store or host any ROMs.</p>
 
   <section>
@@ -63,12 +62,6 @@
       <button id="build-btn">Make link</button>
     </div>
     <p class="hint">It must be the file itself, not a download page. The proxy does not scrape download sites.</p>
-    <details id="proxy-box" style="margin-top:12px">
-      <summary>Proxy server</summary>
-      <label for="proxy">rom-proxy base URL (HTTPS)</label>
-      <input id="proxy" type="url" placeholder="https://your-proxy.example.org">
-      <p class="hint">A running <code>rom-proxy/server.js</code> behind HTTPS. Saved in this browser.</p>
-    </details>
     <div id="src-status" class="status"></div>
   </section>
 

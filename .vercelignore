@@ -1,0 +1,6 @@
+# Deploy only the proxy function, never the test ROMs or the Pages site.
+/*
+!/api
+!/rom-proxy
+!/package.json
+!/vercel.json

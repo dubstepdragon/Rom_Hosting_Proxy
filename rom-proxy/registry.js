@@ -4,7 +4,8 @@
 //
 // Uses an Upstash Redis database over its REST API. Vercel's Upstash integration sets
 // KV_REST_API_URL / KV_REST_API_TOKEN; UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN also work.
-// Without them the registry is off and every link is treated as new.
+// Without them the registry is off and every link is treated as new. A first link that stops
+// loading is replaced by the next link the same ROM arrives from (see proxy.js).
 'use strict';
 const crypto = require('crypto');
 
@@ -43,4 +44,18 @@ async function firstLinkFor(hash, url) {
   }
 }
 
-module.exports = { romHash, firstLinkFor };
+// Swaps a dead first link for `url` and returns the link now registered. Uses a compare-and-set
+// so a request that already replaced the dead link isn't overwritten by another.
+const REPLACE = "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2]) end return redis.call('GET', KEYS[1])";
+
+async function replaceLink(hash, deadUrl, url) {
+  if (!REST_URL || !REST_TOKEN) return url;
+  try {
+    return (await redis('EVAL', REPLACE, '1', `rom:${hash}`, deadUrl, url)) || url;
+  } catch (e) {
+    console.warn(`[registry] ${e.message}`);
+    return url;
+  }
+}
+
+module.exports = { romHash, firstLinkFor, replaceLink };

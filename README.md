@@ -47,9 +47,12 @@ have **Allow Untrusted URLs** turned on.
 Every time the proxy converts a ROM, it hashes the ROM data (after unzipping and stripping any
 copier header) and records the first link that ROM came from. If the same game arrives later from
 a different link, such as a mirror, a renamed file, or the `.zip` instead of the `.sfc`, the
-proxy returns that first link in an `X-Rom-Link` response header. The page checks that the
-existing link still loads, then hands it out in place of the new one, so each ROM ends up with
-one shared image URL. If the existing link no longer loads, the page keeps the new link.
+proxy returns that first link in an `X-Rom-Link` response header, and the page hands it out in
+place of the new one, so each ROM ends up with one shared image URL.
+
+Before reusing a first link, the proxy checks that it still serves a file. If that link now
+returns an error, or a web page (such as a "file removed" notice), the new link replaces it in
+the registry and becomes the one handed out from then on.
 
 The registry lives in an Upstash Redis database (see setup step 4 below). Without it, the proxy
 works as before and treats every link as new.

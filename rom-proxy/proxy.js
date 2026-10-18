@@ -15,7 +15,7 @@
 const dns = require('dns').promises;
 const net = require('net');
 const { RomError, loadRomFile, encodePng } = require('./romimage');
-const { romHash, firstLinkFor } = require('./registry');
+const { romHash, firstLinkFor, replaceLink } = require('./registry');
 
 const MAX_DOWNLOAD = Number(process.env.MAX_DOWNLOAD_MB || 16) * 1024 * 1024;
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 25000);
@@ -51,7 +51,9 @@ async function checkTarget(urlString) {
   return u;
 }
 
-async function download(urlString) {
+// Follows redirects (checking every hop) and returns the final OK response. The caller must
+// clearTimeout(timer) once it has read or cancelled the body.
+async function open(urlString) {
   let current = urlString;
   for (let hop = 0; hop < 5; hop++) {
     await checkTarget(current);
@@ -70,20 +72,38 @@ async function download(urlString) {
       continue;
     }
     if (!res.ok) { clearTimeout(timer); throw new RomError(502, `The ROM host answered HTTP ${res.status}.`); }
-    const declared = Number(res.headers.get('content-length') || 0);
-    if (declared > MAX_DOWNLOAD) { clearTimeout(timer); throw new RomError(413, 'The file is too large.'); }
-    const parts = [];
-    let size = 0;
-    try {
-      for await (const part of res.body) {
-        size += part.length;
-        if (size > MAX_DOWNLOAD) throw new RomError(413, 'The file is too large.');
-        parts.push(part);
-      }
-    } finally { clearTimeout(timer); }
-    return Buffer.concat(parts.map(p => Buffer.from(p)));
+    return { res, timer };
   }
   throw new RomError(508, 'Too many redirects.');
+}
+
+async function download(urlString) {
+  const { res, timer } = await open(urlString);
+  const declared = Number(res.headers.get('content-length') || 0);
+  if (declared > MAX_DOWNLOAD) { clearTimeout(timer); throw new RomError(413, 'The file is too large.'); }
+  const parts = [];
+  let size = 0;
+  try {
+    for await (const part of res.body) {
+      size += part.length;
+      if (size > MAX_DOWNLOAD) throw new RomError(413, 'The file is too large.');
+      parts.push(part);
+    }
+  } finally { clearTimeout(timer); }
+  return Buffer.concat(parts.map(p => Buffer.from(p)));
+}
+
+// Whether a registered link still serves a file: it answers OK and isn't an HTML page (hosts
+// often replace removed files with one). Only the response headers are fetched.
+async function stillServes(urlString) {
+  try {
+    const { res, timer } = await open(urlString);
+    clearTimeout(timer);
+    res.body?.cancel().catch(() => {});
+    return !/text\/html/i.test(res.headers.get('content-type') || '');
+  } catch {
+    return false;
+  }
 }
 
 // The ROM link is everything after "url=" so users can paste unencoded links after the prefix.
@@ -104,7 +124,12 @@ async function handleRom(req, res) {
   const parsed = loadRomFile(file);
   const png = encodePng(parsed);
   const hash = romHash(parsed.rom);
-  const link = await firstLinkFor(hash, target);
+  let link = await firstLinkFor(hash, target);
+  // The ROM is known under another link. If that link has died, this one takes over.
+  if (link !== target && !(await stillServes(link))) {
+    console.log(`[rom] ${link} no longer loads; replacing it with ${target}`);
+    link = await replaceLink(hash, link, target);
+  }
   const entry = { png, hash, link, at: Date.now() };
   cache.set(target, entry);
   if (cache.size > CACHE_ENTRIES) cache.delete(cache.keys().next().value);

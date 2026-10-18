@@ -9,15 +9,18 @@ URLs you paste into your world.
 
 Nothing in this project stores or hosts ROMs. The page only builds links, and the proxy
 (`https://romhostingproxy.vercel.app`) fetches each ROM from its original host when VRChat asks
-for it.
+for it. The only thing kept is a small registry of each ROM's SHA-1 hash and the first link it
+was loaded from (see [Duplicate ROMs](#duplicate-roms)).
 
 ## Using the page
 
 1. Open the [link builder](https://dubstepdragon.github.io/Rom_Hosting_Proxy/).
 2. Paste a **direct link** to a `.sfc` / `.smc` file, or a `.zip` that contains one, and click
    **Make link**.
-3. Click **Test through proxy**. The proxy downloads and converts the ROM, and the page shows the
-   title, LoROM/HiROM mapping, ROM size and SRAM size, or the reason the ROM was rejected.
+3. The page tests the link through the proxy right away. The proxy downloads and converts the
+   ROM, and the page shows the title, LoROM/HiROM mapping, ROM size and SRAM size, or the reason
+   the ROM was rejected. If the ROM was already added from another link, the page gives you that
+   existing link instead.
 4. Click **Copy link** and paste it into a `VRCUrlInputField` (or wherever your world takes a
    `VRCUrl`) for `VRCImageDownloader`.
 
@@ -39,6 +42,18 @@ https://romhostingproxy.vercel.app/rom.png?url=https%3A%2F%2Fexample.org%2Fhomeb
 Image URLs outside VRChat's trusted list, including the proxy's `vercel.app` domain, only load for players who
 have **Allow Untrusted URLs** turned on.
 
+### Duplicate ROMs
+
+Every time the proxy converts a ROM, it hashes the ROM data (after unzipping and stripping any
+copier header) and records the first link that ROM came from. If the same game arrives later from
+a different link, such as a mirror, a renamed file, or the `.zip` instead of the `.sfc`, the
+proxy returns that first link in an `X-Rom-Link` response header. The page checks that the
+existing link still loads, then hands it out in place of the new one, so each ROM ends up with
+one shared image URL. If the existing link no longer loads, the page keeps the new link.
+
+The registry lives in an Upstash Redis database (see setup step 4 below). Without it, the proxy
+works as before and treats every link as new.
+
 ## Deploying the proxy (Vercel)
 
 The proxy runs as a Vercel serverless function on the free Hobby plan (non-commercial use).
@@ -52,6 +67,10 @@ One-time setup:
 2. Name the project `romhostingproxy` (that gives it the `romhostingproxy.vercel.app` domain),
    choose Framework Preset **Other**, and leave the build command empty. Click **Deploy**.
 3. Check that `https://romhostingproxy.vercel.app/health` answers `ok`.
+4. For [duplicate detection](#duplicate-roms), open the project's **Storage** tab, choose
+   **Create Database → Upstash for Redis** (the free plan is enough) and connect it to the
+   project. That adds `KV_REST_API_URL` and `KV_REST_API_TOKEN`. Then redeploy so the proxy picks
+   them up.
 
 After that, every push to `main` redeploys the proxy. If Vercel gives the project a different
 domain, update `PROXY` at the top of [`docs/app.js`](docs/app.js) and the link above.
@@ -78,13 +97,17 @@ host such as Render). To point the page at it, change `PROXY` in [`docs/app.js`]
 | `MAX_DOWNLOAD_MB` | `16`    | Largest file the proxy will download                 |
 | `FETCH_TIMEOUT_MS`| `25000` | Download timeout                                     |
 | `ALLOWED_HOSTS`   | (none)  | Comma-separated hosts to allow, e.g. `a.com,b.org`   |
+| `KV_REST_API_URL` | (none)  | Upstash Redis REST URL for the duplicate registry    |
+| `KV_REST_API_TOKEN`| (none) | Upstash Redis REST token for the duplicate registry  |
 
 On Vercel, set these (except `PORT`) under Project Settings → Environment Variables.
+`UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` also work for the registry.
 
 Private and LAN addresses are always blocked. Endpoints:
 
 * `GET /rom.png?url=<ROM link>` returns the packed PNG, or a non-200 plain-text error so VRChat
-  reports a failure.
+  reports a failure. Successful responses carry `X-Rom-Sha1` (the ROM's hash) and `X-Rom-Link`
+  (the URI-encoded first link this ROM was loaded from).
 * `GET /health` returns `ok`.
 
 ## Offline converter

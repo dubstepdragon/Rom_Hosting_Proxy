@@ -2,26 +2,31 @@
 // and api/ (Vercel serverless functions).
 //
 //   GET /rom.png?url=<direct link to a .sfc/.smc/.zip>  -> PNG-packed ROM (see romimage.js)
+//       X-Rom-Sha1: the ROM's SHA-1; X-Rom-Link: (URI-encoded) the first link this ROM was loaded
+//       from, which differs from ?url= when the ROM is already known (see registry.js)
 //   GET /health                                         -> "ok"
 //
 // Errors come back as non-200 responses so VRChat's image downloader reports a failure and the
 // emulator returns to a state where another link can be loaded.
 //
-// MAX_DOWNLOAD_MB, FETCH_TIMEOUT_MS and ALLOWED_HOSTS env vars are optional.
+// MAX_DOWNLOAD_MB, FETCH_TIMEOUT_MS and ALLOWED_HOSTS env vars are optional, as are the
+// registry's KV_REST_API_URL / KV_REST_API_TOKEN.
 'use strict';
 const dns = require('dns').promises;
 const net = require('net');
 const { RomError, loadRomFile, encodePng } = require('./romimage');
+const { romHash, firstLinkFor } = require('./registry');
 
 const MAX_DOWNLOAD = Number(process.env.MAX_DOWNLOAD_MB || 16) * 1024 * 1024;
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 25000);
 // Optional allow-list of source hosts, comma separated (e.g. "example.org,cdn.example.org").
 const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 const CACHE_ENTRIES = 16;
-// Lets the GitHub Pages link builder (docs/) test links through this proxy and read its errors.
-const CORS = { 'access-control-allow-origin': '*' };
+// Lets the GitHub Pages link builder (docs/) test links through this proxy and read its errors
+// and registry headers.
+const CORS = { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'x-rom-sha1, x-rom-link' };
 
-const cache = new Map();   // url -> { png, at }
+const cache = new Map();   // url -> { png, hash, link, at }
 
 function isPrivateAddress(ip) {
   if (net.isIPv4(ip)) {
@@ -94,18 +99,24 @@ async function handleRom(req, res) {
   const target = targetFromRequest(req.url);
   if (!target) throw new RomError(400, 'Missing ?url=<ROM link>.');
   const hit = cache.get(target);
-  if (hit) return sendPng(res, hit.png);
+  if (hit) return sendPng(res, hit);
   const file = await download(target);
   const parsed = loadRomFile(file);
   const png = encodePng(parsed);
-  cache.set(target, { png, at: Date.now() });
+  const hash = romHash(parsed.rom);
+  const link = await firstLinkFor(hash, target);
+  const entry = { png, hash, link, at: Date.now() };
+  cache.set(target, entry);
   if (cache.size > CACHE_ENTRIES) cache.delete(cache.keys().next().value);
-  console.log(`[rom] ${parsed.title || '(untitled)'} ${parsed.hirom ? 'HiROM' : 'LoROM'} ${parsed.rom.length} bytes <- ${target}`);
-  sendPng(res, png);
+  console.log(`[rom] ${parsed.title || '(untitled)'} ${parsed.hirom ? 'HiROM' : 'LoROM'} ${parsed.rom.length} bytes <- ${target}${link === target ? '' : ` (known from ${link})`}`);
+  sendPng(res, entry);
 }
 
-function sendPng(res, png) {
-  res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length, 'cache-control': 'public, max-age=3600, s-maxage=3600', ...CORS });
+function sendPng(res, { png, hash, link }) {
+  res.writeHead(200, {
+    'content-type': 'image/png', 'content-length': png.length, 'cache-control': 'public, max-age=3600, s-maxage=3600',
+    'x-rom-sha1': hash, 'x-rom-link': encodeURIComponent(link), ...CORS,
+  });
   res.end(png);
 }
 

@@ -1,11 +1,17 @@
 // Link builder for the GitHub Pages site. It never stores ROMs: it builds
-// <proxy>/rom.png?url=<ROM link> for VRCImageDownloader and can test that link through the proxy.
+// <proxy>/rom.png?url=<ROM link> for VRCImageDownloader and tests that link through the proxy. If the
+// proxy has seen the same ROM before under another link, the page hands out that earlier link instead.
 
 // The rom-proxy deployment on Vercel (api/ + vercel.json in this repo). Change it if Vercel gave
 // the project a different domain.
 const PROXY = 'https://romhostingproxy.vercel.app';
 
 const $ = (id) => document.getElementById(id);
+
+const linkFor = (romUrl) => `${PROXY}/rom.png?url=${encodeURIComponent(romUrl)}`;
+
+// The ROM link the shown image URL points at.
+let source = '';
 
 function status(el, text, kind = '') { el.textContent = text; el.className = 'status ' + kind; }
 
@@ -17,10 +23,15 @@ function build() {
   try { url = new URL(link); } catch { return status(el, 'That is not a valid URL.', 'err'); }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return status(el, 'Only http(s) links are supported.', 'err');
   status(el, '');
-  $('link').textContent = `${PROXY}/rom.png?url=${encodeURIComponent(url.href)}`;
-  status($('test-status'), '');
+  source = url.href;
+  $('link').textContent = linkFor(source);
   $('info').hidden = true;
   $('result').hidden = false;
+  test();
+}
+
+async function works(link) {
+  try { return (await fetch(link)).ok; } catch { return false; }
 }
 
 // Reads the packed header (first 48 payload bytes) back out of the proxy's PNG to show what it found.
@@ -81,6 +92,16 @@ async function test() {
       return [dt, dd];
     }));
     $('info').hidden = false;
+    // X-Rom-Link is the first link the proxy saw this ROM under. Reuse it if it still loads.
+    const known = decodeURIComponent(res.headers.get('x-rom-link') || '');
+    if (known && known !== source) {
+      status(el, 'This ROM is already here under another link. Checking that link still works…');
+      if (await works(linkFor(known))) {
+        source = known;
+        $('link').textContent = linkFor(known);
+        return status(el, 'This ROM was already added from another link, so this is its existing image URL. Paste it into your VRChat world.', 'ok');
+      }
+    }
     status(el, 'Works. Paste the link into your VRChat world.', 'ok');
   } catch (e) {
     status(el, e.message, 'err');

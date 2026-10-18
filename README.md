@@ -8,7 +8,7 @@ a ROM from its original host and packs it into that PNG on the fly. The link bui
 URLs you paste into your world.
 
 Nothing in this project stores or hosts ROMs. The page only builds links, and the proxy
-(`https://rom-hosting-proxy.vercel.app`) fetches each ROM from its original host when VRChat asks
+(`https://romhostingproxy.vercel.app`) fetches each ROM from its original host when VRChat asks
 for it.
 
 ## Using the page
@@ -24,7 +24,7 @@ for it.
 The generated link looks like this:
 
 ```
-https://rom-hosting-proxy.vercel.app/rom.png?url=https%3A%2F%2Fexample.org%2Fhomebrew.zip
+https://romhostingproxy.vercel.app/rom.png?url=https%3A%2F%2Fexample.org%2Fhomebrew.zip
 ```
 
 ### What links work
@@ -49,9 +49,9 @@ One-time setup:
 
 1. On [vercel.com](https://vercel.com/new), choose **Add New → Project** and import this GitHub
    repository.
-2. Keep the project name `rom-hosting-proxy`, Framework Preset **Other**, and no build command.
+2. Name the project `romhostingproxy` (that gives it the `romhostingproxy.vercel.app` domain), Framework Preset **Other**, and no build command.
    Click **Deploy**.
-3. Check that `https://rom-hosting-proxy.vercel.app/health` answers `ok`.
+3. Check that `https://romhostingproxy.vercel.app/health` answers `ok`.
 
 After that, every push to `main` redeploys the proxy. If Vercel gives the project a different
 domain, update `PROXY` at the top of [`docs/app.js`](docs/app.js) and the link above.

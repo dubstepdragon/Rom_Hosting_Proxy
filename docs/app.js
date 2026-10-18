@@ -3,7 +3,7 @@
 
 // The rom-proxy deployment on Vercel (api/ + vercel.json in this repo). Change it if Vercel gave
 // the project a different domain.
-const PROXY = 'https://rom-hosting-proxy.vercel.app';
+const PROXY = 'https://romhostingproxy.vercel.app';
 
 const $ = (id) => document.getElementById(id);
 

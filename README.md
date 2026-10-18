@@ -49,8 +49,8 @@ One-time setup:
 
 1. On [vercel.com](https://vercel.com/new), choose **Add New → Project** and import this GitHub
    repository.
-2. Name the project `romhostingproxy` (that gives it the `romhostingproxy.vercel.app` domain), Framework Preset **Other**, and no build command.
-   Click **Deploy**.
+2. Name the project `romhostingproxy` (that gives it the `romhostingproxy.vercel.app` domain),
+   choose Framework Preset **Other**, and leave the build command empty. Click **Deploy**.
 3. Check that `https://romhostingproxy.vercel.app/health` answers `ok`.
 
 After that, every push to `main` redeploys the proxy. If Vercel gives the project a different

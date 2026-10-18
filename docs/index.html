@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNES ROM Link Builder</title>
+<meta name="description" content="Turn a direct SNES ROM link into a rom-proxy image URL for VRCImageDownloader.">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5b6470; --border: #d8dde3;
+    --accent: #3b5bdb; --accent-text: #ffffff; --ok: #2b8a3e; --err: #c92a2a; --code: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #9aa3ad; --border: #2c323a;
+      --accent: #748ffc; --accent-text: #0b0d10; --ok: #69db7c; --err: #ff8787; --code: #232830;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  p.lead { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; font-size: 0.85rem; margin: 10px 0 4px; }
+  input[type=url] {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > input { flex: 1; min-width: 0; }
+  button {
+    padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent);
+    color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; flex: 0 0 auto;
+  }
+  button.secondary { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .hint { color: var(--muted); font-size: 0.85rem; margin: 6px 0 0; }
+  .status { margin-top: 12px; font-size: 0.9rem; white-space: pre-wrap; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 0; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  code, .url { font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; background: var(--code); border-radius: 4px; }
+  code { padding: 1px 4px; }
+  .url { display: block; padding: 8px 10px; overflow-wrap: anywhere; margin: 0 0 8px; }
+  [hidden] { display: none !important; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SNES ROM Link Builder</h1>
+  <p class="lead">Turn a direct ROM link into an image URL for the VRChat emulator's
+    <code>VRCImageDownloader</code>. When the URL loads, the rom-proxy downloads the ROM from its
+    original host and converts it on the fly. This site does not store or host any ROMs.</p>
+
+  <section>
+    <h2>1. ROM link</h2>
+    <label for="src-url">Direct link to a .sfc / .smc file or a .zip containing one</label>
+    <div class="row">
+      <input id="src-url" type="url" placeholder="https://example.org/homebrew.zip" autocomplete="off">
+      <button id="build-btn">Make link</button>
+    </div>
+    <p class="hint">It must be the file itself, not a download page. The proxy does not scrape download sites.</p>
+    <details id="proxy-box" style="margin-top:12px">
+      <summary>Proxy server</summary>
+      <label for="proxy">rom-proxy base URL (HTTPS)</label>
+      <input id="proxy" type="url" placeholder="https://your-proxy.example.org">
+      <p class="hint">A running <code>rom-proxy/server.js</code> behind HTTPS. Saved in this browser.</p>
+    </details>
+    <div id="src-status" class="status"></div>
+  </section>
+
+  <section id="result" hidden>
+    <h2>2. Image URL for VRCImageDownloader</h2>
+    <span id="link" class="url"></span>
+    <div class="row">
+      <button id="copy-btn">Copy link</button>
+      <button id="test-btn" class="secondary">Test through proxy</button>
+    </div>
+    <div id="test-status" class="status"></div>
+    <dl id="info" hidden></dl>
+  </section>
+
+  <p class="hint">Games that need enhancement chips (SuperFX, SA-1, DSP-1, Cx4, S-DD1, SPC7110) and ExHiROM
+    cartridges are rejected. Players need <b>Allow Untrusted URLs</b> turned on for image links outside
+    VRChat's trusted list, which includes the proxy's domain.</p>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

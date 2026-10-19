@@ -36,6 +36,7 @@
   }
   button.secondary { background: transparent; color: var(--accent); }
   button:disabled { opacity: 0.5; cursor: default; }
+  a { color: var(--accent); }
   .hint { color: var(--muted); font-size: 0.85rem; margin: 6px 0 0; }
   .status { margin-top: 12px; font-size: 0.9rem; white-space: pre-wrap; }
   .status.ok { color: var(--ok); } .status.err { color: var(--err); }
@@ -62,6 +63,9 @@
       <button id="build-btn">Make link</button>
     </div>
     <p class="hint">It must be the file itself, not a download page. The proxy does not scrape download sites.</p>
+    <p class="hint">No place to host your own ROM archives? Open
+      <a href="https://archive.org/download/gameplay-snes" target="_blank" rel="noopener">archive.org/download/gameplay-snes</a>,
+      right-click a file and copy its link address, then paste it here.</p>
     <div id="src-status" class="status"></div>
   </section>
 

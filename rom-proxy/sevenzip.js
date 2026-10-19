@@ -3,6 +3,10 @@
 // Supports LZMA, LZMA2 and stored (copy) folders with a single coder, solid archives and
 // compressed (encoded) headers. Filters (BCJ, delta), encryption and other methods are rejected
 // with a clear error. A solid folder is decoded only as far as the end of the wanted file.
+//
+// The archive is read through a source ({ size, maxRead, read(start, end) }) rather than a whole
+// buffer, so an archive too large to download can be read in byte ranges (see proxy.js): only
+// the headers and the packed data in front of the wanted file are fetched.
 'use strict';
 
 class SevenZipError extends Error {}
@@ -366,8 +370,8 @@ function readFolder(r) {
 const METHOD_NAMES = { '00': 'Copy', '030101': 'LZMA', '21': 'LZMA2', '03030103': 'BCJ', '03030205': 'PPC', '03030805': 'SPARC', '0303011b': 'BCJ2', '03': 'Delta', '06f10701': '7zAES (encrypted)',
   '040108': 'Deflate', '040109': 'Deflate64', '040202': 'BZip2', '030401': 'PPMd' };
 
-// Decodes folder `index` of `info` up to `limit` bytes. `file` is the whole archive.
-function decodeFolder(file, info, index, limit) {
+// Decodes folder `index` of `info` up to `limit` bytes. `source` reads the archive.
+async function decodeFolder(source, info, index, limit) {
   const f = info.folders[index];
   if (f.coders.length !== 1) {
     const names = f.coders.map(c => METHOD_NAMES[c.method] || c.method).join(' + ');
@@ -376,13 +380,27 @@ function decodeFolder(file, info, index, limit) {
   let start = 32 + info.packPos, k = 0;
   for (let i = 0; i < index; i++) for (let j = 0; j < info.folders[i].numPacked; j++) start += info.packSizes[k++];
   const size = info.packSizes[k];
-  if (size === undefined || start + size > file.length) throw new SevenZipError('The 7z file is truncated.');
-  const src = file.subarray(start, start + size);
+  if (size === undefined || start + size > source.size) throw new SevenZipError('The 7z file is truncated.');
   const { method, props } = f.coders[0];
-  if (method === '00') return Buffer.from(src.subarray(0, limit));
-  if (method === '030101') return lzma(src, props, limit);
-  if (method === '21') return lzma2(src, limit);
-  throw new SevenZipError(`This 7z uses ${METHOD_NAMES[method] || 'method ' + method} compression, which the proxy cannot unpack. Repack it as a .zip or an LZMA/LZMA2 .7z.`);
+  if (method !== '00' && method !== '030101' && method !== '21') {
+    throw new SevenZipError(`This 7z uses ${METHOD_NAMES[method] || 'method ' + method} compression, which the proxy cannot unpack. Repack it as a .zip or an LZMA/LZMA2 .7z.`);
+  }
+  // A stored file needs only its own bytes. A compressed one needs the packed data up to the end
+  // of the wanted file, which is unknown up front. LZMA hardly ever packs data larger than
+  // itself, so first read a little more than `limit`, then as much as the source allows.
+  const want = method === '00' ? Math.min(size, limit) : size;
+  const most = Math.min(want, source.maxRead);
+  for (let take = Math.min(most, limit + (limit >>> 3) + 65536); ; take = most) {
+    const src = await source.read(start, start + take);
+    try {
+      if (method === '00') return Buffer.from(src);
+      if (method === '030101') return lzma(src, props, limit);
+      return lzma2(src, limit);
+    } catch (e) {
+      if (!(e instanceof SevenZipError) || take === want) throw e;
+      if (take === most) throw new SevenZipError('The ROM is too deep inside this large 7z to unpack. Use a smaller archive, or one with the ROM first.');
+    }
+  }
 }
 
 function readFilesInfo(r) {
@@ -412,15 +430,17 @@ function readFilesInfo(r) {
 
 /**
  * Lists the archive and extracts one file. `pick(names)` returns the index of the wanted name
- * (or -1). Returns { name, data } or throws SevenZipError.
+ * (or -1). Returns { name, data }, or null if nothing was picked, or throws SevenZipError.
  */
-function extract7z(file, pick, maxSize) {
-  if (file.length < 32) throw new SevenZipError('The 7z file is truncated.');
-  const nextOffset = Number(file.readBigUInt64LE(12));
-  const nextSize = Number(file.readBigUInt64LE(20));
+async function extract7z(source, pick, maxSize) {
+  if (source.size < 32) throw new SevenZipError('The 7z file is truncated.');
+  const start = await source.read(0, 32);
+  const nextOffset = Number(start.readBigUInt64LE(12));
+  const nextSize = Number(start.readBigUInt64LE(20));
   if (nextSize === 0) throw new SevenZipError('The 7z archive is empty.');
-  if (32 + nextOffset + nextSize > file.length) throw new SevenZipError('The 7z file is truncated.');
-  let header = file.subarray(32 + nextOffset, 32 + nextOffset + nextSize);
+  if (32 + nextOffset + nextSize > source.size) throw new SevenZipError('The 7z file is truncated.');
+  if (nextSize > 16 * 1024 * 1024) throw new SevenZipError('The 7z header is too large.');
+  let header = await source.read(32 + nextOffset, 32 + nextOffset + nextSize);
 
   for (let guard = 0; header[0] === 0x17 && guard < 4; guard++) {   // encoded header
     const r = new Reader(header);
@@ -429,7 +449,7 @@ function extract7z(file, pick, maxSize) {
     if (!info.folders.length) throw new SevenZipError('Corrupt 7z header.');
     const size = info.folders[0].unpackSizes[0];
     if (size > 16 * 1024 * 1024) throw new SevenZipError('The 7z header is too large.');
-    header = decodeFolder(file, info, 0, size);
+    header = await decodeFolder(source, info, 0, size);
   }
   const r = new Reader(header);
   r.expect(0x01);
@@ -464,7 +484,7 @@ function extract7z(file, pick, maxSize) {
   if (!e || e.size === undefined) throw new SevenZipError('Corrupt 7z header.');
   if (e.size > maxSize) throw new SevenZipError('The ROM inside the 7z is too large.');
   if (e.offset + e.size > 64 * 1024 * 1024) throw new SevenZipError('The ROM is too deep inside a large solid 7z. Use a smaller archive.');
-  const data = decodeFolder(file, info, e.folder, e.offset + e.size);
+  const data = await decodeFolder(source, info, e.folder, e.offset + e.size);
   return { name: e.name, data: Buffer.from(data.subarray(e.offset, e.offset + e.size)) };
 }
 

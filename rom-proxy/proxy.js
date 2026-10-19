@@ -6,27 +6,35 @@
 //       from, which differs from ?url= when the ROM is already known (see registry.js)
 //   GET /health                                         -> "ok"
 //
+// A .7z larger than MAX_DOWNLOAD_MB isn't downloaded whole: if its host serves byte ranges, only
+// the headers and the data in front of the first .smc are fetched (see sevenzip.js).
+//
+// Converted ROMs are kept in memory, up to CACHE_MB. A new ROM that would take the cache past 80%
+// of that first evicts the ROMs that have gone longest without being requested.
+//
 // Errors come back as non-200 responses so VRChat's image downloader reports a failure and the
 // emulator returns to a state where another link can be loaded.
 //
-// MAX_DOWNLOAD_MB, FETCH_TIMEOUT_MS and ALLOWED_HOSTS env vars are optional, as are the
+// MAX_DOWNLOAD_MB, FETCH_TIMEOUT_MS, ALLOWED_HOSTS and CACHE_MB env vars are optional, as are the
 // registry's KV_REST_API_URL / KV_REST_API_TOKEN.
 'use strict';
 const dns = require('dns').promises;
 const net = require('net');
-const { RomError, loadRomFile, encodePng } = require('./romimage');
+const { RomError, loadRomFile, load7zSource, is7z, encodePng } = require('./romimage');
 const { romHash, firstLinkFor, replaceLink } = require('./registry');
 
 const MAX_DOWNLOAD = Number(process.env.MAX_DOWNLOAD_MB || 16) * 1024 * 1024;
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 25000);
 // Optional allow-list of source hosts, comma separated (e.g. "example.org,cdn.example.org").
 const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-const CACHE_ENTRIES = 16;
+const CACHE_BYTES = Number(process.env.CACHE_MB || 256) * 1024 * 1024;
+const CACHE_HIGH_WATER = 0.8;
 // Lets the GitHub Pages link builder (docs/) test links through this proxy and read its errors
 // and registry headers.
 const CORS = { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'x-rom-sha1, x-rom-link' };
 
-const cache = new Map();   // url -> { png, hash, link, at }
+const cache = new Map();   // url -> { png, hash, link, at }, least recently requested first
+let cacheBytes = 0;
 
 function isPrivateAddress(ip) {
   if (net.isIPv4(ip)) {
@@ -53,7 +61,7 @@ async function checkTarget(urlString) {
 
 // Follows redirects (checking every hop) and returns the final OK response. The caller must
 // clearTimeout(timer) once it has read or cancelled the body.
-async function open(urlString) {
+async function open(urlString, headers = {}) {
   let current = urlString;
   for (let hop = 0; hop < 5; hop++) {
     await checkTarget(current);
@@ -61,7 +69,7 @@ async function open(urlString) {
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     let res;
     try {
-      res = await fetch(current, { redirect: 'manual', signal: ctrl.signal, headers: { 'user-agent': 'vrchat-snes-rom-proxy/1.0' } });
+      res = await fetch(current, { redirect: 'manual', signal: ctrl.signal, headers: { 'user-agent': 'vrchat-snes-rom-proxy/1.0', ...headers } });
     } catch (e) {
       clearTimeout(timer);
       throw new RomError(504, e.name === 'AbortError' ? 'The ROM download timed out.' : `Could not download the ROM (${e.message}).`);
@@ -80,17 +88,87 @@ async function open(urlString) {
 async function download(urlString) {
   const { res, timer } = await open(urlString);
   const declared = Number(res.headers.get('content-length') || 0);
-  if (declared > MAX_DOWNLOAD) { clearTimeout(timer); throw new RomError(413, 'The file is too large.'); }
+  if (declared > MAX_DOWNLOAD) {
+    clearTimeout(timer);
+    res.body?.cancel().catch(() => {});
+    throw new RomError(413, 'The file is too large.');
+  }
+  return readBody(res, timer, MAX_DOWNLOAD);
+}
+
+async function readBody(res, timer, max) {
   const parts = [];
   let size = 0;
   try {
     for await (const part of res.body) {
       size += part.length;
-      if (size > MAX_DOWNLOAD) throw new RomError(413, 'The file is too large.');
+      if (size > max) throw new RomError(413, 'The file is too large.');
       parts.push(part);
     }
   } finally { clearTimeout(timer); }
   return Buffer.concat(parts.map(p => Buffer.from(p)));
+}
+
+// Fetches bytes [start, end) of a remote file. Returns { data, total }, or null if the host
+// ignores the Range header.
+async function fetchRange(urlString, start, end) {
+  const { res, timer } = await open(urlString, { range: `bytes=${start}-${end - 1}` });
+  const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get('content-range') || '');
+  if (res.status !== 206 || !m || Number(m[1]) !== start) {
+    clearTimeout(timer);
+    res.body?.cancel().catch(() => {});
+    return null;
+  }
+  const data = await readBody(res, timer, end - start);
+  if (data.length !== Math.min(end, Number(m[3])) - start) throw new RomError(502, 'The ROM host sent an incomplete part of the file.');
+  return { data, total: Number(m[3]) };
+}
+
+// A sevenzip.js source that reads a remote file in byte ranges of up to MAX_DOWNLOAD each, or null
+// if the host can't serve ranges. `head` holds the file's first 32 bytes.
+async function rangedSource(urlString) {
+  const first = await fetchRange(urlString, 0, 32);
+  if (!first) return null;
+  return {
+    head: first.data,
+    size: first.total,
+    maxRead: MAX_DOWNLOAD,
+    async read(start, end) {
+      if (end <= first.data.length) return first.data.subarray(start, end);
+      if (end - start > MAX_DOWNLOAD) throw new RomError(413, 'The file is too large.');
+      const part = await fetchRange(urlString, start, end);
+      if (!part) throw new RomError(502, 'The ROM host stopped serving parts of the file.');
+      return part.data;
+    },
+  };
+}
+
+// Downloads and parses the ROM. A .7z too large to download is read in byte ranges instead.
+async function loadRom(urlString) {
+  try {
+    return await loadRomFile(await download(urlString));
+  } catch (e) {
+    if (!(e instanceof RomError) || e.status !== 413) throw e;
+    const source = await rangedSource(urlString).catch(() => null);
+    if (!source || !is7z(source.head)) throw e;
+    console.log(`[rom] ${urlString} is ${(source.size / 1048576).toFixed(1)} MB; reading the 7z in parts`);
+    return load7zSource(source);
+  }
+}
+
+// Adds a converted ROM to the cache. If that would take the cache past CACHE_HIGH_WATER, the ROMs
+// requested least recently are evicted first. A ROM too large to fit at all isn't cached.
+function remember(url, entry) {
+  const limit = CACHE_BYTES * CACHE_HIGH_WATER;
+  if (entry.png.length > limit) return;
+  for (const [oldUrl, old] of cache) {
+    if (cacheBytes + entry.png.length <= limit) break;
+    cache.delete(oldUrl);
+    cacheBytes -= old.png.length;
+    console.log(`[cache] evicted ${oldUrl} (last requested ${new Date(old.at).toISOString()})`);
+  }
+  cache.set(url, entry);
+  cacheBytes += entry.png.length;
 }
 
 // Whether a registered link still serves a file: it answers OK and isn't an HTML page (hosts
@@ -119,9 +197,13 @@ async function handleRom(req, res) {
   const target = targetFromRequest(req.url);
   if (!target) throw new RomError(400, 'Missing ?url=<ROM link>.');
   const hit = cache.get(target);
-  if (hit) return sendPng(res, hit);
-  const file = await download(target);
-  const parsed = loadRomFile(file);
+  if (hit) {
+    cache.delete(target);   // move to the most recently requested end
+    cache.set(target, hit);
+    hit.at = Date.now();
+    return sendPng(res, hit);
+  }
+  const parsed = await loadRom(target);
   const png = encodePng(parsed);
   const hash = romHash(parsed.rom);
   let link = await firstLinkFor(hash, target);
@@ -131,8 +213,7 @@ async function handleRom(req, res) {
     link = await replaceLink(hash, link, target);
   }
   const entry = { png, hash, link, at: Date.now() };
-  cache.set(target, entry);
-  if (cache.size > CACHE_ENTRIES) cache.delete(cache.keys().next().value);
+  remember(target, entry);
   console.log(`[rom] ${parsed.title || '(untitled)'} ${parsed.hirom ? 'HiROM' : 'LoROM'} ${parsed.rom.length} bytes <- ${target}${link === target ? '' : ` (known from ${link})`}`);
   sendPng(res, entry);
 }

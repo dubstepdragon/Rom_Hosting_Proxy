@@ -16,8 +16,9 @@ was loaded from (see [Duplicate ROMs](#duplicate-roms)).
 
 1. Open the [link builder](https://dubstepdragon.github.io/Rom_Hosting_Proxy/).
 2. Paste a **direct link** to a `.sfc` / `.smc` file, or a `.zip` / `.7z` that contains one, and
-   click **Make link**. If an archive holds several versions of a game (a GoodSNES set, for
-   example), the proxy picks a verified `[!]` dump and prefers USA/Japan releases.
+   click **Make link**. If a `.7z` holds `.smc` files, the proxy loads the first `.smc` in the
+   archive's listing. Otherwise, if an archive holds several versions of a game (a GoodSNES set,
+   for example), the proxy picks a verified `[!]` dump and prefers USA/Japan releases.
 3. The page tests the link through the proxy right away. The proxy downloads and converts the
    ROM, and the page shows the title, LoROM/HiROM mapping, ROM size and SRAM size, or the reason
    the ROM was rejected. If the ROM was already added from another link, the page gives you that
@@ -39,6 +40,10 @@ https://romhostingproxy.vercel.app/rom.png?url=https%3A%2F%2Fexample.org%2Fhomeb
 * Games that need enhancement chips (SuperFX, SA-1, DSP-1, Cx4, S-DD1, SPC7110) and ExHiROM
   cartridges are **rejected**, so they fail cleanly instead of crashing.
 * ROMs up to 8 MB.
+* Files up to 16 MB (`MAX_DOWNLOAD_MB`). A larger `.7z` still works if its host supports
+  partial downloads (HTTP range requests, as archive.org does): the proxy reads only the archive's
+  headers and the data in front of the first `.smc`, and converts just that ROM. If the ROM sits
+  too deep inside a large solid archive, the link is rejected with an error.
 
 Image URLs outside VRChat's trusted list, including the proxy's `vercel.app` domain, only load for players who
 have **Allow Untrusted URLs** turned on.
@@ -80,7 +85,9 @@ After that, every push to `main` redeploys the proxy. If Vercel gives the projec
 domain, update `PROXY` at the top of [`docs/app.js`](docs/app.js) and the link above.
 
 Vercel caches each converted ROM on its CDN for an hour, so a whole instance loading the same
-link only converts it once. Vercel limits function responses to 4.5 MB, so the very largest ROMs
+link only converts it once. Each running proxy also keeps converted ROMs in memory, up to
+`CACHE_MB`. When a new ROM would take that cache past 80%, the ROMs that have gone longest
+without being requested are dropped first. Vercel limits function responses to 4.5 MB, so the very largest ROMs
 (roughly 6–8 MB) may fail there. Use the standalone server for those.
 
 ## Running the proxy yourself
@@ -101,6 +108,7 @@ host such as Render). To point the page at it, change `PROXY` in [`docs/app.js`]
 | `MAX_DOWNLOAD_MB` | `16`    | Largest file the proxy will download                 |
 | `FETCH_TIMEOUT_MS`| `25000` | Download timeout                                     |
 | `ALLOWED_HOSTS`   | (none)  | Comma-separated hosts to allow, e.g. `a.com,b.org`   |
+| `CACHE_MB`        | `256`   | Memory for converted ROMs; trimmed at 80%            |
 | `KV_REST_API_URL` | (none)  | Upstash Redis REST URL for the duplicate registry    |
 | `KV_REST_API_TOKEN`| (none) | Upstash Redis REST token for the duplicate registry  |
 

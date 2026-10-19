@@ -116,9 +116,16 @@ function pickRom(names) {
   return best;
 }
 
-function extract7zRom(buf) {
+// In a .7z holding .smc files, the first .smc in the archive's listing is the one to load. That is
+// also the cheapest to reach in a solid archive, which matters when it is read in byte ranges.
+function pick7zRom(names) {
+  const smc = names.findIndex(name => /\.smc$/i.test(name));
+  return smc >= 0 ? smc : pickRom(names);
+}
+
+async function extract7zRom(source) {
   try {
-    const hit = extract7z(buf, pickRom, MAX_ROM + 512);
+    const hit = await extract7z(source, pick7zRom, MAX_ROM + 512);
     if (!hit) throw new RomError(422, 'The 7z does not contain a .sfc/.smc ROM.');
     return hit.data;
   } catch (e) {
@@ -127,10 +134,15 @@ function extract7zRom(buf) {
   }
 }
 
+function is7z(buf) { return buf.length >= 6 && buf.readUInt32BE(0) === 0x377ABCAF && buf.readUInt16BE(4) === 0x271C; }
+
 /** Accepts a raw ROM, a zip or a 7z and returns the parsed ROM. */
-function loadRomFile(buf) {
+async function loadRomFile(buf) {
   if (buf.length >= 4 && buf.readUInt32LE(0) === 0x04034b50) buf = extractZip(buf);
-  else if (buf.length >= 6 && buf.readUInt32BE(0) === 0x377ABCAF && buf.readUInt16BE(4) === 0x271C) buf = extract7zRom(buf);
+  else if (is7z(buf)) {
+    const whole = buf;
+    buf = await extract7zRom({ size: whole.length, maxRead: Infinity, read: async (start, end) => whole.subarray(start, end) });
+  }
   const archive = buf.length < 6 ? null
     : buf.subarray(0, 4).toString('latin1') === 'Rar!' ? '.rar'
     : buf[0] === 0x1F && buf[1] === 0x8B ? '.gz'
@@ -142,6 +154,12 @@ function loadRomFile(buf) {
   }
   return parseRom(buf);
 }
+
+/**
+ * Loads the ROM from a 7z read through `source` ({ size, maxRead, read(start, end) }), for an
+ * archive too large to download whole.
+ */
+async function load7zSource(source) { return parseRom(await extract7zRom(source)); }
 
 function crc32(buf) { return zlib.crc32(buf) >>> 0; }
 
@@ -182,4 +200,4 @@ function encodePng({ rom, hirom, sramCode, title }) {
   ]);
 }
 
-module.exports = { RomError, loadRomFile, parseRom, encodePng, MAX_ROM };
+module.exports = { RomError, loadRomFile, load7zSource, is7z, parseRom, encodePng, MAX_ROM };

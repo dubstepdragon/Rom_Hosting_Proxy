@@ -15,8 +15,9 @@ was loaded from (see [Duplicate ROMs](#duplicate-roms)).
 ## Using the page
 
 1. Open the [link builder](https://dubstepdragon.github.io/Rom_Hosting_Proxy/).
-2. Paste a **direct link** to a `.sfc` / `.smc` file, or a `.zip` that contains one, and click
-   **Make link**.
+2. Paste a **direct link** to a `.sfc` / `.smc` file, or a `.zip` / `.7z` that contains one, and
+   click **Make link**. If an archive holds several versions of a game (a GoodSNES set, for
+   example), the proxy picks a verified `[!]` dump and prefers USA/Japan releases.
 3. The page tests the link through the proxy right away. The proxy downloads and converts the
    ROM, and the page shows the title, LoROM/HiROM mapping, ROM size and SRAM size, or the reason
    the ROM was rejected. If the ROM was already added from another link, the page gives you that

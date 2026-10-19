@@ -1,7 +1,7 @@
 // ROM proxy request handling for the VRChat SNES emulator, shared by server.js (standalone Node)
 // and api/ (Vercel serverless functions).
 //
-//   GET /rom.png?url=<direct link to a .sfc/.smc/.zip>  -> PNG-packed ROM (see romimage.js)
+//   GET /rom.png?url=<direct link to a .sfc/.smc/.zip/.7z>  -> PNG-packed ROM (see romimage.js)
 //       X-Rom-Sha1: the ROM's SHA-1; X-Rom-Link: (URI-encoded) the first link this ROM was loaded
 //       from, which differs from ?url= when the ROM is already known (see registry.js)
 //   GET /health                                         -> "ok"

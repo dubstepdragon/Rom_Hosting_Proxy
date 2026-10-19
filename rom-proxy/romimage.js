@@ -9,6 +9,7 @@
 // Must match Assets/SNES/Shaders/SnesRomDecode.shader.
 'use strict';
 const zlib = require('zlib');
+const { extract7z, SevenZipError } = require('./sevenzip');
 
 const WIDTH = 2048;
 const DATA_OFFSET = 48;
@@ -49,7 +50,9 @@ function parseRom(buf) {
   if (rom.length > MAX_ROM) throw new RomError(422, `ROM is ${(rom.length / 1048576).toFixed(1)} MB; the emulator supports up to 8 MB.`);
   const lo = scoreHeader(rom, 0x7FC0, false);
   const hi = scoreHeader(rom, 0xFFC0, true);
-  if (Math.max(lo, hi) < 2) throw new RomError(422, 'No valid SNES header found - this does not look like a SNES ROM.');
+  // Random bytes score 2 half the time (a reset vector >= $8000 is a coin flip) and 4 about 1 in
+  // 16 (plus a plausible map byte). Real headers score 5+ even with a bad checksum.
+  if (Math.max(lo, hi) < 5) throw new RomError(422, 'No valid SNES header found - this does not look like a SNES ROM.');
   const hirom = hi > lo;
   const base = hirom ? 0xFFC0 : 0x7FC0;
   const type = rom[base + 0x16];
@@ -83,7 +86,7 @@ function extractZip(buf) {
     entries.push({ method, csize, usize, local, name });
     p += 46 + nlen + xlen + clen;
   }
-  const rom = entries.find(e => /\.(sfc|smc|swc|fig|bin)$/i.test(e.name)) ;
+  const rom = entries[pickRom(entries.map(e => e.name))];
   if (!rom) throw new RomError(422, 'The zip does not contain a .sfc/.smc ROM.');
   if (rom.usize > MAX_ROM + 512) throw new RomError(422, 'ROM inside the zip is too large.');
   const lp = rom.local;
@@ -95,9 +98,44 @@ function extractZip(buf) {
   throw new RomError(422, `Unsupported zip compression method ${rom.method}.`);
 }
 
-/** Accepts a raw ROM or a zip and returns the parsed ROM. */
+/**
+ * Picks the ROM to load from an archive listing (GoodSNES-style sets hold many variants):
+ * verified [!] dumps first, then NTSC releases, avoiding bad/hacked/trained/translated ones.
+ * Returns -1 if there is no ROM file.
+ */
+function pickRom(names) {
+  let best = -1, bestScore = -Infinity;
+  names.forEach((name, i) => {
+    if (!/\.(sfc|smc|swc|fig|bin)$/i.test(name)) return;
+    let score = 0;
+    if (name.includes('[!]')) score += 8;
+    if (/\((U|USA|J|Japan|JU|UJ)\)/i.test(name)) score += 4;
+    if (/\[(b|h|t|f|o|a|p|T[+-])[^\]]*\]/.test(name)) score -= 2;
+    if (score > bestScore) { best = i; bestScore = score; }
+  });
+  return best;
+}
+
+function extract7zRom(buf) {
+  try {
+    const hit = extract7z(buf, pickRom, MAX_ROM + 512);
+    if (!hit) throw new RomError(422, 'The 7z does not contain a .sfc/.smc ROM.');
+    return hit.data;
+  } catch (e) {
+    if (e instanceof SevenZipError) throw new RomError(422, e.message);
+    throw e;
+  }
+}
+
+/** Accepts a raw ROM, a zip or a 7z and returns the parsed ROM. */
 function loadRomFile(buf) {
   if (buf.length >= 4 && buf.readUInt32LE(0) === 0x04034b50) buf = extractZip(buf);
+  else if (buf.length >= 6 && buf.readUInt32BE(0) === 0x377ABCAF && buf.readUInt16BE(4) === 0x271C) buf = extract7zRom(buf);
+  const archive = buf.length < 6 ? null
+    : buf.subarray(0, 4).toString('latin1') === 'Rar!' ? '.rar'
+    : buf[0] === 0x1F && buf[1] === 0x8B ? '.gz'
+    : null;
+  if (archive) throw new RomError(422, `${archive} archives are not supported. Use a direct link to a .sfc/.smc file, a .zip or a .7z.`);
   const head = buf.subarray(0, 64).toString('latin1').toLowerCase();
   if (head.includes('<!doctype') || head.includes('<html')) {
     throw new RomError(422, 'The link returned a web page, not a file. Use a direct download link to the ROM file.');

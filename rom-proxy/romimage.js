@@ -4,15 +4,20 @@
 // PNG: RGB, 2048 pixels wide, 3 bytes per pixel, read row-major from the top-left.
 //   bytes 0-2  'S','N','S'           bytes 3-5  ROM length (little endian)
 //   byte 6     flags (bit1 = HiROM)  byte 7     SRAM size code (log2(KB)+1, 0 = none)
-//   bytes 8-47 reserved (title in 8-28 for debugging)
-//   bytes 48+  ROM data
-// Must match Assets/SNES/Shaders/SnesRomDecode.shader.
+//   bytes 8-28 title (for debugging)     byte 29    label art format (0 = none, 1 = 256x176 RGB)
+//   bytes 30-47 reserved
+//   bytes 48+  label art when byte 29 is 1: 256x176 pixels, 3 bytes each, rows top to bottom
+//              (the cartridge label the world shows, see coverart.js)
+//   then       ROM data (from byte 48 + 135168 with label art, byte 48 without)
+// Must match Assets/SNES/Shaders/SnesRomDecode.shader and SnesLabelDecode.shader.
 'use strict';
 const zlib = require('zlib');
 const { extract7z, SevenZipError } = require('./sevenzip');
+const { LABEL_BYTES } = require('./coverart');
 
 const WIDTH = 2048;
 const DATA_OFFSET = 48;
+const ART_FORMAT_LABEL = 1;   // header byte 29: LABEL_BYTES of label art follow the header
 const MAX_ROM = 2048 * 1023 * 4;          // ROM texture capacity
 const MAX_IMAGE_BYTES = 2048 * 2048 * 3;  // VRChat image size limit
 
@@ -64,7 +69,7 @@ function parseRom(buf) {
   return { rom, hirom, sramCode, title };
 }
 
-/** Pulls the first SNES ROM out of a .zip (stored or deflated entries). */
+/** Pulls the first SNES ROM out of a .zip (stored or deflated entries): { name, data }. */
 function extractZip(buf) {
   // Find the end of central directory record.
   let eocd = -1;
@@ -93,8 +98,8 @@ function extractZip(buf) {
   if (buf.readUInt32LE(lp) !== 0x04034b50) throw new RomError(422, 'Corrupt zip entry.');
   const start = lp + 30 + buf.readUInt16LE(lp + 26) + buf.readUInt16LE(lp + 28);
   const data = buf.subarray(start, start + rom.csize);
-  if (rom.method === 0) return Buffer.from(data);
-  if (rom.method === 8) return zlib.inflateRawSync(data, { maxOutputLength: MAX_ROM + 1024 });
+  if (rom.method === 0) return { name: rom.name, data: Buffer.from(data) };
+  if (rom.method === 8) return { name: rom.name, data: zlib.inflateRawSync(data, { maxOutputLength: MAX_ROM + 1024 }) };
   throw new RomError(422, `Unsupported zip compression method ${rom.method}.`);
 }
 
@@ -127,7 +132,7 @@ async function extract7zRom(source) {
   try {
     const hit = await extract7z(source, pick7zRom, MAX_ROM + 512);
     if (!hit) throw new RomError(422, 'The 7z does not contain a .sfc/.smc ROM.');
-    return hit.data;
+    return hit;
   } catch (e) {
     if (e instanceof SevenZipError) throw new RomError(422, e.message);
     throw e;
@@ -136,13 +141,19 @@ async function extract7zRom(source) {
 
 function is7z(buf) { return buf.length >= 6 && buf.readUInt32BE(0) === 0x377ABCAF && buf.readUInt16BE(4) === 0x271C; }
 
-/** Accepts a raw ROM, a zip or a 7z and returns the parsed ROM. */
+/**
+ * Accepts a raw ROM, a zip or a 7z and returns the parsed ROM, plus `fileName`: the ROM's name
+ * inside the archive, or null for a bare ROM.
+ */
 async function loadRomFile(buf) {
-  if (buf.length >= 4 && buf.readUInt32LE(0) === 0x04034b50) buf = extractZip(buf);
+  let fileName = null;
+  let hit = null;
+  if (buf.length >= 4 && buf.readUInt32LE(0) === 0x04034b50) hit = extractZip(buf);
   else if (is7z(buf)) {
     const whole = buf;
-    buf = await extract7zRom({ size: whole.length, maxRead: Infinity, read: async (start, end) => whole.subarray(start, end) });
+    hit = await extract7zRom({ size: whole.length, maxRead: Infinity, read: async (start, end) => whole.subarray(start, end) });
   }
+  if (hit) { buf = hit.data; fileName = hit.name; }
   const archive = buf.length < 6 ? null
     : buf.subarray(0, 4).toString('latin1') === 'Rar!' ? '.rar'
     : buf[0] === 0x1F && buf[1] === 0x8B ? '.gz'
@@ -152,14 +163,17 @@ async function loadRomFile(buf) {
   if (head.includes('<!doctype') || head.includes('<html')) {
     throw new RomError(422, 'The link returned a web page, not a file. Use a direct download link to the ROM file.');
   }
-  return parseRom(buf);
+  return { ...parseRom(buf), fileName };
 }
 
 /**
  * Loads the ROM from a 7z read through `source` ({ size, maxRead, read(start, end) }), for an
  * archive too large to download whole.
  */
-async function load7zSource(source) { return parseRom(await extract7zRom(source)); }
+async function load7zSource(source) {
+  const hit = await extract7zRom(source);
+  return { ...parseRom(hit.data), fileName: hit.name };
+}
 
 function crc32(buf) { return zlib.crc32(buf) >>> 0; }
 
@@ -170,9 +184,11 @@ function chunk(type, data) {
   return Buffer.concat([len, td, crc]);
 }
 
-/** Packs a parsed ROM into the PNG layout described above. */
-function encodePng({ rom, hirom, sramCode, title }) {
-  const total = DATA_OFFSET + rom.length;
+/** Packs a parsed ROM (and optional LABEL_BYTES of label art) into the PNG layout described above. */
+function encodePng({ rom, hirom, sramCode, title }, art = null) {
+  if (art && art.length !== LABEL_BYTES) throw new Error(`label art must be ${LABEL_BYTES} bytes`);
+  const romOffset = DATA_OFFSET + (art ? LABEL_BYTES : 0);
+  const total = romOffset + rom.length;
   const height = Math.ceil(total / (WIDTH * 3));
   if (WIDTH * height * 3 > MAX_IMAGE_BYTES) throw new RomError(422, 'ROM too large for a 2048x2048 image.');
   const payload = Buffer.alloc(WIDTH * height * 3);
@@ -181,7 +197,11 @@ function encodePng({ rom, hirom, sramCode, title }) {
   payload[6] = hirom ? 2 : 0;
   payload[7] = sramCode;
   Buffer.from((title || '').slice(0, 21), 'latin1').copy(payload, 8);
-  rom.copy ? rom.copy(payload, DATA_OFFSET) : payload.set(rom, DATA_OFFSET);
+  if (art) {
+    payload[29] = ART_FORMAT_LABEL;
+    art.copy(payload, DATA_OFFSET);
+  }
+  rom.copy ? rom.copy(payload, romOffset) : payload.set(rom, romOffset);
 
   const stride = WIDTH * 3;
   const raw = Buffer.alloc((stride + 1) * height);

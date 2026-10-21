@@ -10,8 +10,20 @@ const $ = (id) => document.getElementById(id);
 
 const linkFor = (romUrl) => `${PROXY}/rom.png?url=${encodeURIComponent(romUrl)}`;
 
-// The ROM link the shown image URL points at.
+// The ROM link the shown image URL points at, and the game title the proxy read from it.
 let source = '';
+let title = '';
+
+const PAGE_TITLE = document.title;
+
+// This page with ?url=<ROM link>. Opening it fills in the link and builds the image URL again.
+function bookmarkUrl() {
+  const page = new URL(location.href);
+  page.search = '';
+  page.hash = '';
+  page.searchParams.set('url', source);
+  return page.href;
+}
 
 function status(el, text, kind = '') { el.textContent = text; el.className = 'status ' + kind; }
 
@@ -24,6 +36,8 @@ function build() {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return status(el, 'Only http(s) links are supported.', 'err');
   status(el, '');
   source = url.href;
+  title = '';
+  $('bookmark-hint').hidden = true;
   $('link').textContent = linkFor(source);
   $('info').hidden = true;
   $('result').hidden = false;
@@ -80,6 +94,7 @@ async function test() {
     }
     const png = new Uint8Array(await res.arrayBuffer());
     const h = await readHeader(png);
+    title = h.title;
     // X-Rom-Art: "boxart:<matched name>" or "drawn:<name>" (the label on the cartridge in the world).
     const art = decodeURIComponent(res.headers.get('x-rom-art') || '');
     const label = !h.hasLabel ? 'none (old proxy)'
@@ -116,6 +131,18 @@ async function test() {
   }
 }
 
+// Pages can't add bookmarks themselves, so put the bookmark URL in the address bar, name the page after
+// the game, and ask for Ctrl+D (or a drag of the link to the bookmarks bar).
+function bookmark() {
+  const href = bookmarkUrl();
+  history.replaceState(null, '', href);
+  document.title = title ? `${title} - ${PAGE_TITLE}` : PAGE_TITLE;
+  $('bookmark-link').href = href;
+  $('bookmark-link').textContent = title || 'this link';
+  $('bookmark-keys').textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘+D' : 'Ctrl+D';
+  $('bookmark-hint').hidden = false;
+}
+
 async function copyLink() {
   const btn = $('copy-btn');
   try { await navigator.clipboard.writeText($('link').textContent); btn.textContent = 'Copied'; }
@@ -128,6 +155,10 @@ function init() {
   $('src-url').addEventListener('keydown', e => { if (e.key === 'Enter') build(); });
   $('copy-btn').addEventListener('click', copyLink);
   $('test-btn').addEventListener('click', test);
+  $('bookmark-btn').addEventListener('click', bookmark);
+  // Opened from a bookmark: rebuild the image URL for the saved ROM link.
+  const saved = new URLSearchParams(location.search).get('url');
+  if (saved) { $('src-url').value = saved; build(); }
 }
 
 init();

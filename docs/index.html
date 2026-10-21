@@ -62,19 +62,13 @@
       <button id="build-btn">Make link</button>
     </div>
     <p class="hint">It must be the file itself, not a download page. The proxy does not scrape download sites.</p>
-    <p class="hint">No place to host your own ROM archives? Try one of Two Methods:
+    <p class="hint">No place to host your own ROM archives?
 	  <br/><a href="https://archive.org/download/gameplay-snes" target="_blank" rel="noopener">archive.org/download/gameplay-snes</a>,
       <br/>1. Find a game you want 
 	  <br/> 2. click view contents 
 	  <br/> 3. Right click a version and copy its link address 
 	  <br/> 4. paste it here.
-	  <br/>
-	  <br/>
-	  <br/><a href="https://github.com/dolchi21-retroarch/snes-roms" target="_blank" rel="noopener">https://github.com/dolchi21-retroarch/snes-roms</a>,
-	   <br/>1. Find and click the game you want 
-	  <br/> 2. Right click "View Raw" and the click copy link address
-	  <br/> 3. paste it here.
-	  
+	  <br/>	  
 	  <br/>
 	  <br/> Feel free to also look for any other files on archive.org that are a zip of a rom or an .smc file.
 	  You can also host your own files as well.
@@ -88,7 +82,10 @@
     <div class="row">
       <button id="copy-btn">Copy link</button>
       <button id="test-btn" class="secondary">Test again</button>
+      <button id="bookmark-btn" class="secondary">Bookmark</button>
     </div>
+    <p id="bookmark-hint" class="hint" hidden>Press <b id="bookmark-keys">Ctrl+D</b> to bookmark this page, or drag
+      <a id="bookmark-link" href="#"></a> to your bookmarks bar. Opening the bookmark rebuilds this image URL.</p>
     <div id="test-status" class="status"></div>
     <dl id="info" hidden></dl>
   </section>

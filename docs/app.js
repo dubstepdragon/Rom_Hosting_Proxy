@@ -158,7 +158,12 @@ function init() {
   $('bookmark-btn').addEventListener('click', bookmark);
   // Opened from a bookmark: rebuild the image URL for the saved ROM link.
   const saved = new URLSearchParams(location.search).get('url');
-  if (saved) { $('src-url').value = saved; build(); }
+  if (saved) $('src-url').value = saved;
+  // Any link already in the field gets built. Browsers can refill the field after scripts run (reload,
+  // back/forward, restored tab), so check again on pageshow.
+  const buildIfFilled = () => { if ($('src-url').value.trim() && $('result').hidden) build(); };
+  buildIfFilled();
+  addEventListener('pageshow', buildIfFilled);
 }
 
 init();

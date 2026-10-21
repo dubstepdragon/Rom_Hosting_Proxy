@@ -20,8 +20,8 @@ was loaded from (see [Duplicate ROMs](#duplicate-roms)).
    archive's listing. Otherwise, if an archive holds several versions of a game (a GoodSNES set,
    for example), the proxy picks a verified `[!]` dump and prefers USA/Japan releases.
 3. The page tests the link through the proxy right away. The proxy downloads and converts the
-   ROM, and the page shows the title, LoROM/HiROM mapping, ROM size and SRAM size, or the reason
-   the ROM was rejected. If the ROM was already added from another link, the page gives you that
+   ROM, and the page shows the title, LoROM/HiROM mapping, ROM size, SRAM size and the cartridge
+   label it picked (see [Cartridge labels](#cartridge-labels)), or the reason the ROM was rejected. If the ROM was already added from another link, the page gives you that
    existing link instead.
 4. Click **Copy link** and paste it into a `VRCUrlInputField` (or wherever your world takes a
    `VRCUrl`) for `VRCImageDownloader`.
@@ -47,6 +47,21 @@ https://romhostingproxy.vercel.app/rom.png?url=https%3A%2F%2Fexample.org%2Fhomeb
 
 Image URLs outside VRChat's trusted list, including the proxy's `vercel.app` domain, only load for players who
 have **Allow Untrusted URLs** turned on.
+
+### Cartridge labels
+
+The world spawns a cartridge for each game, with the game's box art on its label. The proxy finds
+that art itself: it looks the game up in the [libretro thumbnail set](https://thumbnails.libretro.com/)
+(No-Intro named box art) by the ROM's file name (the file inside a `.zip` / `.7z`, or the
+link's file name), falling back to the title in the ROM header, and takes the closest match. A
+match in the file's own region is preferred, then USA, World, Europe and Japan releases; betas,
+prototypes and re-releases come last. The art is cropped to the label's shape and scaled to
+256x176 pixels.
+
+If no listed name is close enough, or the lookup fails or takes longer than `ART_TIMEOUT_MS`, the
+proxy draws a label instead: the game's name, kept to letters, numbers and spaces and wrapped to
+fit the label, on a colour picked from the name. A label never stops a ROM from loading. The
+response's `X-Rom-Art` header says which it was: `boxart:<matched name>` or `drawn:<name>`.
 
 ### Duplicate ROMs
 
@@ -109,6 +124,7 @@ host such as Render). To point the page at it, change `PROXY` in [`docs/app.js`]
 | `FETCH_TIMEOUT_MS`| `25000` | Download timeout                                     |
 | `ALLOWED_HOSTS`   | (none)  | Comma-separated hosts to allow, e.g. `a.com,b.org`   |
 | `CACHE_MB`        | `256`   | Memory for converted ROMs; trimmed at 80%            |
+| `ART_TIMEOUT_MS`  | `6000`  | Time allowed for finding and downloading box art     |
 | `KV_REST_API_URL` | (none)  | Upstash Redis REST URL for the duplicate registry    |
 | `KV_REST_API_TOKEN`| (none) | Upstash Redis REST token for the duplicate registry  |
 
@@ -119,7 +135,8 @@ Private and LAN addresses are always blocked. Endpoints:
 
 * `GET /rom.png?url=<ROM link>` returns the packed PNG, or a non-200 plain-text error so VRChat
   reports a failure. Successful responses carry `X-Rom-Sha1` (the ROM's hash) and `X-Rom-Link`
-  (the URI-encoded first link this ROM was loaded from).
+  (the URI-encoded first link this ROM was loaded from) and `X-Rom-Art` (where the cartridge label
+  came from, see [Cartridge labels](#cartridge-labels)).
 * `GET /health` returns `ok`.
 
 ## Offline converter
@@ -127,7 +144,8 @@ Private and LAN addresses are always blocked. Endpoints:
 To convert a ROM without a proxy:
 
 ```
-node rom-proxy/rom2png.js game.sfc game.png
+node rom-proxy/rom2png.js game.sfc game.png            # looks up box art online
+node rom-proxy/rom2png.js game.sfc game.png --no-art   # draws the name label, no network
 ```
 
 You can host that PNG yourself. GitHub Pages is on VRChat's trusted list by default. A Pages site
@@ -144,10 +162,14 @@ RGB, 2048 pixels wide, 3 bytes per pixel, read row-major from the top-left:
 | 3-5     | ROM length (little endian)                |
 | 6       | Flags (bit 1 = HiROM)                     |
 | 7       | SRAM size code (log2(KB)+1, 0 = none)     |
-| 8-47    | Reserved (title in 8-28 for debugging)    |
-| 48+     | ROM data                                  |
+| 8-28    | Title (for debugging)                     |
+| 29      | Label art format (0 = none, 1 = 256x176 RGB) |
+| 30-47   | Reserved                                  |
+| 48+     | Label art when byte 29 is 1: 256x176 pixels, 3 bytes each, rows top to bottom (135,168 bytes) |
+| then    | ROM data: from byte 135,216 with label art, from byte 48 without |
 
-This must match `Assets/SNES/Shaders/SnesRomDecode.shader` in the emulator project.
+This must match `Assets/SNES/Shaders/SnesRomDecode.shader` and `SnesLabelDecode.shader` in the
+emulator project. Images without label art (byte 29 = 0) still load.
 
 ## Deploying the page
 

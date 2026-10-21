@@ -3,7 +3,9 @@
 //
 //   GET /rom.png?url=<direct link to a .sfc/.smc/.zip/.7z>  -> PNG-packed ROM (see romimage.js)
 //       X-Rom-Sha1: the ROM's SHA-1; X-Rom-Link: (URI-encoded) the first link this ROM was loaded
-//       from, which differs from ?url= when the ROM is already known (see registry.js)
+//       from, which differs from ?url= when the ROM is already known (see registry.js); X-Rom-Art:
+//       where the cartridge label came from, "boxart:<matched name>" or "drawn:<name>" (URI-encoded,
+//       see coverart.js)
 //   GET /health                                         -> "ok"
 //
 // A .7z larger than MAX_DOWNLOAD_MB isn't downloaded whole: if its host serves byte ranges, only
@@ -22,6 +24,7 @@ const dns = require('dns').promises;
 const net = require('net');
 const { RomError, loadRomFile, load7zSource, is7z, encodePng } = require('./romimage');
 const { romHash, firstLinkFor, replaceLink } = require('./registry');
+const { labelFor } = require('./coverart');
 
 const MAX_DOWNLOAD = Number(process.env.MAX_DOWNLOAD_MB || 16) * 1024 * 1024;
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 25000);
@@ -31,9 +34,9 @@ const CACHE_BYTES = Number(process.env.CACHE_MB || 256) * 1024 * 1024;
 const CACHE_HIGH_WATER = 0.8;
 // Lets the GitHub Pages link builder (docs/) test links through this proxy and read its errors
 // and registry headers.
-const CORS = { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'x-rom-sha1, x-rom-link' };
+const CORS = { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'x-rom-sha1, x-rom-link, x-rom-art' };
 
-const cache = new Map();   // url -> { png, hash, link, at }, least recently requested first
+const cache = new Map();   // url -> { png, hash, link, art, at }, least recently requested first
 let cacheBytes = 0;
 
 function isPrivateAddress(ip) {
@@ -184,6 +187,11 @@ async function stillServes(urlString) {
   }
 }
 
+// The file name at the end of a link (e.g. "Super Mario World (USA).zip"), for finding box art.
+function fileFromUrl(urlString) {
+  try { return decodeURIComponent(new URL(urlString).pathname.split('/').pop() || ''); } catch { return ''; }
+}
+
 // The ROM link is everything after "url=" so users can paste unencoded links after the prefix.
 function targetFromRequest(reqUrl) {
   const i = reqUrl.indexOf('url=');
@@ -204,7 +212,9 @@ async function handleRom(req, res) {
     return sendPng(res, hit);
   }
   const parsed = await loadRom(target);
-  const png = encodePng(parsed);
+  const label = await labelFor({ fileName: parsed.fileName || fileFromUrl(target), title: parsed.title });
+  const png = encodePng(parsed, label.rgb);
+  const art = `${label.source}:${label.name}`;
   const hash = romHash(parsed.rom);
   let link = await firstLinkFor(hash, target);
   // The ROM is known under another link. If that link has died, this one takes over.
@@ -212,16 +222,16 @@ async function handleRom(req, res) {
     console.log(`[rom] ${link} no longer loads; replacing it with ${target}`);
     link = await replaceLink(hash, link, target);
   }
-  const entry = { png, hash, link, at: Date.now() };
+  const entry = { png, hash, link, art, at: Date.now() };
   remember(target, entry);
-  console.log(`[rom] ${parsed.title || '(untitled)'} ${parsed.hirom ? 'HiROM' : 'LoROM'} ${parsed.rom.length} bytes <- ${target}${link === target ? '' : ` (known from ${link})`}`);
+  console.log(`[rom] ${parsed.title || '(untitled)'} ${parsed.hirom ? 'HiROM' : 'LoROM'} ${parsed.rom.length} bytes <- ${target}${link === target ? '' : ` (known from ${link})`}, label ${art}`);
   sendPng(res, entry);
 }
 
-function sendPng(res, { png, hash, link }) {
+function sendPng(res, { png, hash, link, art }) {
   res.writeHead(200, {
     'content-type': 'image/png', 'content-length': png.length, 'cache-control': 'public, max-age=3600, s-maxage=3600',
-    'x-rom-sha1': hash, 'x-rom-link': encodeURIComponent(link), ...CORS,
+    'x-rom-sha1': hash, 'x-rom-link': encodeURIComponent(link), 'x-rom-art': encodeURIComponent(art), ...CORS,
   });
   res.end(png);
 }

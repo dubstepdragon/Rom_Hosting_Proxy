@@ -61,7 +61,7 @@ async function readHeader(png) {
   if (String.fromCharCode(h[0], h[1], h[2]) !== 'SNS') throw new Error('The proxy returned an image without a ROM header.');
   const romLength = h[3] | (h[4] << 8) | (h[5] << 16);
   const title = String.fromCharCode(...h.subarray(8, 29)).replace(/[^\x20-\x7E]/g, '').trim();
-  return { title, hirom: (h[6] & 2) !== 0, sramCode: h[7], romLength, height };
+  return { title, hirom: (h[6] & 2) !== 0, sramCode: h[7], romLength, height, hasLabel: h[29] === 1 };
 }
 
 async function test() {
@@ -80,11 +80,17 @@ async function test() {
     }
     const png = new Uint8Array(await res.arrayBuffer());
     const h = await readHeader(png);
+    // X-Rom-Art: "boxart:<matched name>" or "drawn:<name>" (the label on the cartridge in the world).
+    const art = decodeURIComponent(res.headers.get('x-rom-art') || '');
+    const label = !h.hasLabel ? 'none (old proxy)'
+      : art.startsWith('boxart:') ? `box art of ${art.slice(7)}`
+      : `drawn: ${art.slice(art.indexOf(':') + 1) || 'game name'} (no box art found)`;
     $('info').replaceChildren(...[
       ['Title', h.title || '(untitled)'],
       ['Mapping', h.hirom ? 'HiROM' : 'LoROM'],
       ['ROM size', `${(h.romLength / 1024).toFixed(0)} KB`],
       ['SRAM', h.sramCode ? `${1 << (h.sramCode - 1)} KB` : 'none'],
+      ['Cartridge label', label],
       ['Image', `2048 × ${h.height} px, ${(png.length / 1024).toFixed(0)} KB`],
     ].flatMap(([k, v]) => {
       const dt = document.createElement('dt'); dt.textContent = k;

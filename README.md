@@ -168,8 +168,10 @@ RGB, 2048 pixels wide, 3 bytes per pixel, read row-major from the top-left:
 | 48+     | Label art when byte 29 is 1: 256x176 pixels, 3 bytes each, rows top to bottom (135,168 bytes) |
 | then    | ROM data: from byte 135,216 with label art, from byte 48 without |
 
-This must match `Assets/SNES/Shaders/SnesRomDecode.shader` and `SnesLabelDecode.shader` in the
-emulator project. Images without label art (byte 29 = 0) still load.
+This must match `Assets/SNES/Shaders/SnesImage.cginc`, `SnesRomDecode.shader` and `SnesLabelDecode.shader`
+in the emulator project. Images without label art (byte 29 = 0) still load. The decoder unpacks the ROM
+into an integer texture (R32_SInt, one little-endian 32-bit word per texel, 2048x1023 plus a header row),
+which is the limit behind `MAX_ROM`. The PNG itself stays RGB, so images made before that change still load.
 
 ## Deploying the page
 

@@ -9,7 +9,8 @@
 //   bytes 48+  label art when byte 29 is 1: 256x176 pixels, 3 bytes each, rows top to bottom
 //              (the cartridge label the world shows, see coverart.js)
 //   then       ROM data (from byte 48 + 135168 with label art, byte 48 without)
-// Must match Assets/SNES/Shaders/SnesRomDecode.shader and SnesLabelDecode.shader.
+// Must match Assets/SNES/Shaders/SnesImage.cginc, SnesRomDecode.shader and SnesLabelDecode.shader. The decoder writes
+// the ROM into an integer texture (R32_SInt, one little-endian word per texel); this image format doesn't depend on that.
 'use strict';
 const zlib = require('zlib');
 const { extract7z, SevenZipError } = require('./sevenzip');
@@ -18,7 +19,7 @@ const { LABEL_BYTES } = require('./coverart');
 const WIDTH = 2048;
 const DATA_OFFSET = 48;
 const ART_FORMAT_LABEL = 1;   // header byte 29: LABEL_BYTES of label art follow the header
-const MAX_ROM = 2048 * 1023 * 4;          // ROM texture capacity
+const MAX_ROM = 2048 * 1023 * 4;          // ROM texture capacity: 1023 rows of 2048 words (row 1023 is the decoded header)
 const MAX_IMAGE_BYTES = 2048 * 2048 * 3;  // VRChat image size limit
 
 class RomError extends Error {
